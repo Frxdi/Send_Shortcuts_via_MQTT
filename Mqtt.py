@@ -1,11 +1,10 @@
-
-
-
-
-
 import paho.mqtt.client as mqtt
 import keyboard
 import sys
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 #Var Init
 red = 0
@@ -16,16 +15,13 @@ white = 0
 buzzerc = 0
 buzzerp = 0
 
-
-BROKER = "localhost"
-PORT = 1883
+#Init MQTT
+BROKER = os.getenv("BROKER")
+PORT = os.getenv("PORT")
 
 client = mqtt.Client()
 client.connect(BROKER, PORT, keepalive=60)
 
-client.publish("stange/rot", payload="{red}", qos=1)
-client.publish("stange/orange", payload="2", qos=1)
-client.publish("stange/grün", payload="3", qos=1)
 
 #Defining Colors 
 def Red():
@@ -110,6 +106,12 @@ keyboard.add_hotkey("ctrl+alt+6", Buzzerc)
 keyboard.add_hotkey("ctrl+alt+7", Buzzerp)
 keyboard.add_hotkey("ctrl+alt+0", Exit)
 
-keyboard.wait()
+client.publish("stange/rot", payload="{red}", qos=1)
+client.publish("stange/orange", payload="{orange}", qos=1)
+client.publish("stange/grün", payload="{green}", qos=1)
+client.publish("stange/grün", payload="{blue}", qos=1)
+client.publish("stange/grün", payload="{white}", qos=1)
+client.publish("stange/grün", payload="{buzzerc}", qos=1)
+client.publish("stange/grün", payload="{buzzerp}", qos=1)
 
-client.disconnect()
+keyboard.wait()
