@@ -35,16 +35,25 @@ function Initialize-MQTT {
         # Build MQTT CONNECT packet (protocol: MQTT 3.1.1)
         $clientId = "PS_Client"
         $clientIdBytes = [System.Text.Encoding]::UTF8.GetBytes($clientId)
+        $usernameBytes = [System.Text.Encoding]::UTF8.GetBytes($script:MQTT_USER)
+        $passwordBytes = [System.Text.Encoding]::UTF8.GetBytes($script:MQTT_PASSWORD)
 
         $payload = @(
+            # Client ID
             0x00, $clientIdBytes.Length
-        ) + $clientIdBytes
+        ) + $clientIdBytes + @(
+            # Username
+            0x00, $usernameBytes.Length
+        ) + $usernameBytes + @(
+            # Password
+            0x00, $passwordBytes.Length
+        ) + $passwordBytes
 
         $variableHeader = @(
             0x00, 0x04,
             0x4D, 0x51, 0x54, 0x54,  # "MQTT"
             0x04,                     # Protocol level (3.1.1)
-            0x02,                     # Connect flags (Clean session)
+            0xC2,                     # Connect flags User + Password + Clean session
             0x00, 0x3C                # Keep-alive: 60s
         )
 
@@ -196,9 +205,34 @@ function Initialize {
     # Get MQTT config
     $script:BROKER = [Environment]::GetEnvironmentVariable('BROKER', 'Process')
     $script:PORT   = [Environment]::GetEnvironmentVariable('PORT', 'Process')
+    $script:MQTT_USER   = [Environment]::GetEnvironmentVariable('MQTT_USER', 'Process')
+    $script:MQTT_PASSWORD   = [Environment]::GetEnvironmentVariable('MQTT_PASSWORD', 'Process')
 
-    if (-not $script:BROKER -or -not $script:PORT) {
-        Write-Host "Error: BROKER or PORT not defined in .env file" -ForegroundColor Red
+    if (-not $script:BROKER) {
+        Write-Host "Error: BROKER not defined in .env file" -ForegroundColor Red
+        Write-Host "Press any key to exit..." -ForegroundColor Yellow
+        [Console]::ReadKey($true) | Out-Null
+        exit 1
+    }
+
+     if (-not $script:PORT) {
+        Write-Host "Error:PORT not defined in .env file" -ForegroundColor Red
+         Write-Host "Press any key to exit..." -ForegroundColor Yellow
+        [Console]::ReadKey($true) | Out-Null
+        exit 1
+    }
+
+     if (-not $script:MQTT_USER) {
+        Write-Host "Error: USER not defined in .env file" -ForegroundColor Red
+         Write-Host "Press any key to exit..." -ForegroundColor Yellow
+        [Console]::ReadKey($true) | Out-Null
+        exit 1
+    }
+
+     if (-not $script:MQTT_PASSWORD ) {
+        Write-Host "Error: PASSWORD not defined in .env file" -ForegroundColor Red
+         Write-Host "Press any key to exit..." -ForegroundColor Yellow
+        [Console]::ReadKey($true) | Out-Null
         exit 1
     }
 
@@ -257,8 +291,25 @@ function Main {
         $VK_6 = @{ func = { Buzzerc }; name = "Buzzer Continous" }
         $VK_7 = @{ func = { Buzzerp }; name = "Buzzer Pulsing" }
     }
+    
+    #INIT Watchdog Ping
+    $lastPing = [DateTime]::Now
+    $MQTT_True = $false
 
     while ($script:running) {
+
+        # Ping alle 60 Sekunden senden
+    if (([DateTime]::Now - $lastPing).TotalSeconds -ge 2 -and -not $MQTT_True ) {
+            Publish-MQTTMessage -topic "status/ping"              -message "1"
+            $MQTT_True = $true
+        
+    }
+    if (([DateTime]::Now - $lastPing).TotalSeconds -ge 4) {
+        Publish-MQTTMessage -topic "status/ping"              -message "0"
+        $lastPing = [DateTime]::Now
+        $MQTT_True = $false
+    }
+
         $ctrlPressed    = Test-IsKeyPressed $VK_CONTROL
         $altPressed     = Test-IsKeyPressed $VK_MENU
         $ctrlAltPressed = $ctrlPressed -and $altPressed
@@ -282,7 +333,6 @@ function Main {
         Start-Sleep -Milliseconds 10
     }
 }
-
 function Cleanup {
     #Resetting MQTT Topics
     Publish-MQTTMessage -topic "status/red"              -message "0"

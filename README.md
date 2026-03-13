@@ -14,8 +14,10 @@ This PowerShell script uses keyboard shortcuts to control status indicators and 
 The script uses a `.env` file for configuration with the following variables:
 
 ```
-BROKER=127.0.0.1    # MQTT Broker IP address or hostname
-PORT=1883           # MQTT Broker port (default MQTT port is 1883)
+BROKER=127.0.0.1               # MQTT Broker IP address or hostname
+PORT=1883                      # MQTT Broker port (default MQTT port is 1883)
+MQTT_USER="yourUser"           # Username which has to be valid for the MQTT Broker 
+MQTT_PASSWORD="yourPassword"   # Password which has to be valid for the MQTT Broker 
 ```
 
 ### Updating Configuration
@@ -25,6 +27,8 @@ Edit the `.env` file to change the MQTT broker settings:
 ```bash
 BROKER=your.mqtt.broker.com
 PORT=1883
+MQTT_USER="yourUser"
+MQTT_PASSWORD="yourPassword"
 ```
 
 ## Running the Script
@@ -40,7 +44,7 @@ PORT=1883
 1. Open PowerShell as Administrator
 2. Navigate to the script directory:
    ```powershell
-   cd "C:\Users\frejo\OneDrive\Documents\Hackclub\Test Status Teams Localhost"
+   cd "Your_Path\"
    ```
 
 3. Run the script:

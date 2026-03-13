@@ -21,6 +21,8 @@ CONFIGURATION (.env):
 Edit the .env file to set:
   BROKER=your.mqtt.broker.com (default: 127.0.0.1)
   PORT=1883 (default MQTT port)
+  MQTT_USER="yourUsername"
+  MQTT_PASSWORD="yourPassword"
 
 
 HOTKEYS:
@@ -32,7 +34,7 @@ Ctrl+Alt+4  -> Blue toggle
 Ctrl+Alt+5  -> White toggle
 Ctrl+Alt+6  -> Buzzer (Correct) toggle
 Ctrl+Alt+7  -> Buzzer (Problem) toggle
-Ctrl+C      -> Exit script
+Ctrl+Alt+0  -> Exit script
 
 
 WHAT IT DOES:
