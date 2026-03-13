@@ -31,55 +31,51 @@ function Initialize-MQTT {
         $script:mqttClient.Connect($script:BROKER, [int]$script:PORT)
         $stream = $script:mqttClient.GetStream()
         $script:mqttStream = $stream
+        $global:mqttStream = $stream        # Für Event Handler Runspace
+        $global:mqttConnected = $false
 
-        # Build MQTT CONNECT packet (protocol: MQTT 3.1.1)
-        $clientId = "PS_Client"
+        $clientId      = "PS_Client"
         $clientIdBytes = [System.Text.Encoding]::UTF8.GetBytes($clientId)
         $usernameBytes = [System.Text.Encoding]::UTF8.GetBytes($script:MQTT_USER)
         $passwordBytes = [System.Text.Encoding]::UTF8.GetBytes($script:MQTT_PASSWORD)
 
-        $payload = @(
-            # Client ID
-            0x00, $clientIdBytes.Length
-        ) + $clientIdBytes + @(
-            # Username
-            0x00, $usernameBytes.Length
-        ) + $usernameBytes + @(
-            # Password
-            0x00, $passwordBytes.Length
-        ) + $passwordBytes
+        $payload = @(0x00, $clientIdBytes.Length) + $clientIdBytes +
+                   @(0x00, $usernameBytes.Length) + $usernameBytes +
+                   @(0x00, $passwordBytes.Length) + $passwordBytes
 
         $variableHeader = @(
             0x00, 0x04,
-            0x4D, 0x51, 0x54, 0x54,  # "MQTT"
-            0x04,                     # Protocol level (3.1.1)
-            0xC2,                     # Connect flags User + Password + Clean session
-            0x00, 0x3C                # Keep-alive: 60s
+            0x4D, 0x51, 0x54, 0x54,
+            0x04,
+            0xC2,
+            0x00, 0x3C
         )
 
         $remainingLength = $variableHeader.Length + $payload.Length
-        $fixedHeader = @(0x10, $remainingLength)
+        $fixedHeader     = @(0x10, $remainingLength)
+        $packet          = [byte[]]($fixedHeader + $variableHeader + $payload)
 
-        $packet = [byte[]]($fixedHeader + $variableHeader + $payload)
         $stream.Write($packet, 0, $packet.Length)
         $stream.Flush()
 
-        # Read CONNACK
         Start-Sleep -Milliseconds 500
         $response = New-Object byte[] 4
         $stream.Read($response, 0, 4) | Out-Null
 
         if ($response[0] -eq 0x20 -and $response[3] -eq 0x00) {
             $script:mqttConnected = $true
+            $global:mqttConnected = $true   # Für Event Handler Runspace
             Write-Host "Connected to MQTT Broker: $script:BROKER`:$script:PORT" -ForegroundColor Green
         } else {
             Write-Host "MQTT CONNACK failed: $($response -join ' ')" -ForegroundColor Red
             $script:mqttConnected = $false
+            $global:mqttConnected = $false
         }
     }
     catch {
         Write-Host "Warning: Could not connect to MQTT Broker: $_" -ForegroundColor Yellow
         $script:mqttConnected = $false
+        $global:mqttConnected = $false
     }
 }
 
@@ -100,9 +96,9 @@ function Publish-MQTTMessage {
             ) + $topicBytes
 
             $remainingLength = $variableHeader.Length + $messageBytes.Length
-            $fixedHeader = @(0x30, [byte]$remainingLength)
+            $fixedHeader     = @(0x30, [byte]$remainingLength)
+            $packet          = [byte[]]($fixedHeader + $variableHeader + $messageBytes)
 
-            $packet = [byte[]]($fixedHeader + $variableHeader + $messageBytes)
             $script:mqttStream.Write($packet, 0, $packet.Length)
             $script:mqttStream.Flush()
 
@@ -124,6 +120,8 @@ function Disconnect-MQTT {
             }
             $script:mqttClient.Close()
             $script:mqttConnected = $false
+            $global:mqttConnected = $false
+            $global:mqttStream    = $null
             Write-Host "Disconnected from MQTT Broker" -ForegroundColor Green
         }
         catch {
@@ -193,6 +191,84 @@ function Test-IsKeyPressed {
 
 # endregion
 
+# region --- SESSION HANDLER ---
+
+$script:sessionHandler = {
+    $reason = $Event.SourceArgs[1].Reason
+
+    if ($reason -eq [Microsoft.Win32.SessionSwitchReason]::SessionLock) {
+        Write-Host "PC gesperrt" -ForegroundColor Yellow
+
+        $msgs = [ordered]@{
+            "status/red"              = "0"
+            "status/orange"           = "1"
+            "status/green"            = "0"
+            "status/blue"             = "0"
+            "status/white"            = "0"
+            "status/buzzer_continous" = "0"
+            "status/buzzer_pulsing"   = "0"
+        }
+
+        if ($global:mqttConnected -and $global:mqttStream -ne $null) {
+            foreach ($topic in $msgs.Keys) {
+                try {
+                    $topicBytes   = [System.Text.Encoding]::UTF8.GetBytes($topic)
+                    $messageBytes = [System.Text.Encoding]::UTF8.GetBytes($msgs[$topic])
+                    $varHeader    = @(
+                        [byte]($topicBytes.Length -shr 8),
+                        [byte]($topicBytes.Length -band 0xFF)
+                    ) + $topicBytes
+                    $remaining = $varHeader.Length + $messageBytes.Length
+                    $packet    = [byte[]](@(0x30, [byte]$remaining) + $varHeader + $messageBytes)
+                    $global:mqttStream.Write($packet, 0, $packet.Length)
+                    $global:mqttStream.Flush()
+                    Write-Host "Published: $topic = $($msgs[$topic])" -ForegroundColor Cyan
+                }
+                catch {
+                    Write-Host "Lock: Error publishing $topic : $_" -ForegroundColor Red
+                }
+            }
+        }
+    }
+
+    if ($reason -eq [Microsoft.Win32.SessionSwitchReason]::SessionUnlock) {
+        Write-Host "PC entsperrt" -ForegroundColor Green
+
+        $msgs = [ordered]@{
+            "status/red"              = "0"
+            "status/orange"           = "0"
+            "status/green"            = "1"
+            "status/blue"             = "0"
+            "status/white"            = "0"
+            "status/buzzer_continous" = "0"
+            "status/buzzer_pulsing"   = "0"
+        }
+
+        if ($global:mqttConnected -and $global:mqttStream -ne $null) {
+            foreach ($topic in $msgs.Keys) {
+                try {
+                    $topicBytes   = [System.Text.Encoding]::UTF8.GetBytes($topic)
+                    $messageBytes = [System.Text.Encoding]::UTF8.GetBytes($msgs[$topic])
+                    $varHeader    = @(
+                        [byte]($topicBytes.Length -shr 8),
+                        [byte]($topicBytes.Length -band 0xFF)
+                    ) + $topicBytes
+                    $remaining = $varHeader.Length + $messageBytes.Length
+                    $packet    = [byte[]](@(0x30, [byte]$remaining) + $varHeader + $messageBytes)
+                    $global:mqttStream.Write($packet, 0, $packet.Length)
+                    $global:mqttStream.Flush()
+                    Write-Host "Published: $topic = $($msgs[$topic])" -ForegroundColor Cyan
+                }
+                catch {
+                    Write-Host "Unlock: Error publishing $topic : $_" -ForegroundColor Red
+                }
+            }
+        }
+    }
+}
+
+# endregion
+
 # region --- INIT / MAIN / CLEANUP ---
 
 function Initialize {
@@ -202,49 +278,36 @@ function Initialize {
     $envFilePath = Join-Path $scriptDir ".env"
     Load-EnvFile $envFilePath
 
-    # Get MQTT config
-    $script:BROKER = [Environment]::GetEnvironmentVariable('BROKER', 'Process')
-    $script:PORT   = [Environment]::GetEnvironmentVariable('PORT', 'Process')
-    $script:MQTT_USER   = [Environment]::GetEnvironmentVariable('MQTT_USER', 'Process')
-    $script:MQTT_PASSWORD   = [Environment]::GetEnvironmentVariable('MQTT_PASSWORD', 'Process')
+    $script:BROKER        = [Environment]::GetEnvironmentVariable('BROKER',        'Process')
+    $script:PORT          = [Environment]::GetEnvironmentVariable('PORT',          'Process')
+    $script:MQTT_USER     = [Environment]::GetEnvironmentVariable('MQTT_USER',     'Process')
+    $script:MQTT_PASSWORD = [Environment]::GetEnvironmentVariable('MQTT_PASSWORD', 'Process')
 
     if (-not $script:BROKER) {
         Write-Host "Error: BROKER not defined in .env file" -ForegroundColor Red
-        Write-Host "Press any key to exit..." -ForegroundColor Yellow
-        [Console]::ReadKey($true) | Out-Null
-        exit 1
+        [Console]::ReadKey($true) | Out-Null; exit 1
     }
-
-     if (-not $script:PORT) {
-        Write-Host "Error:PORT not defined in .env file" -ForegroundColor Red
-         Write-Host "Press any key to exit..." -ForegroundColor Yellow
-        [Console]::ReadKey($true) | Out-Null
-        exit 1
+    if (-not $script:PORT) {
+        Write-Host "Error: PORT not defined in .env file" -ForegroundColor Red
+        [Console]::ReadKey($true) | Out-Null; exit 1
     }
-
-     if (-not $script:MQTT_USER) {
-        Write-Host "Error: USER not defined in .env file" -ForegroundColor Red
-         Write-Host "Press any key to exit..." -ForegroundColor Yellow
-        [Console]::ReadKey($true) | Out-Null
-        exit 1
+    if (-not $script:MQTT_USER) {
+        Write-Host "Error: MQTT_USER not defined in .env file" -ForegroundColor Red
+        [Console]::ReadKey($true) | Out-Null; exit 1
     }
-
-     if (-not $script:MQTT_PASSWORD ) {
-        Write-Host "Error: PASSWORD not defined in .env file" -ForegroundColor Red
-         Write-Host "Press any key to exit..." -ForegroundColor Yellow
-        [Console]::ReadKey($true) | Out-Null
-        exit 1
+    if (-not $script:MQTT_PASSWORD) {
+        Write-Host "Error: MQTT_PASSWORD not defined in .env file" -ForegroundColor Red
+        [Console]::ReadKey($true) | Out-Null; exit 1
     }
 
     # State variables
-    $script:red     = 0
-    $script:orange  = 0
-    $script:green   = 0
-    $script:blue    = 0
-    $script:white   = 0
-    $script:buzzerc = 0
-    $script:buzzerp = 0
-
+    $script:red            = 0
+    $script:orange         = 0
+    $script:green          = 0
+    $script:blue           = 0
+    $script:white          = 0
+    $script:buzzerc        = 0
+    $script:buzzerp        = 0
     $script:mqttClient     = $null
     $script:mqttStream     = $null
     $script:mqttConnected  = $false
@@ -253,6 +316,15 @@ function Initialize {
 
     # Connect MQTT
     Initialize-MQTT
+
+    # Register Session Lock/Unlock handler NACH MQTT connect
+    Add-Type -AssemblyName System.Windows.Forms
+    Register-ObjectEvent `
+        -InputObject ([Microsoft.Win32.SystemEvents]) `
+        -EventName   "SessionSwitch" `
+        -Action      $script:sessionHandler | Out-Null
+
+    Write-Host "Session Lock/Unlock listener registered" -ForegroundColor Green
 
     # Reset all topics to 0
     Publish-MQTTMessage -topic "status/red"              -message "0"
@@ -263,15 +335,14 @@ function Initialize {
     Publish-MQTTMessage -topic "status/buzzer_continous" -message "0"
     Publish-MQTTMessage -topic "status/buzzer_pulsing"   -message "0"
 
-    # Hide console window completely
+    # Hide console window
     $consoleHandle = [Win32.MeineWin32API]::GetConsoleWindow()
     [Win32.MeineWin32API]::ShowWindow($consoleHandle, 0) | Out-Null
 }
 
 function Main {
-    # Virtual key codes
     $VK_CONTROL = 0x11
-    $VK_MENU    = 0x12  # Alt
+    $VK_MENU    = 0x12
     $VK_0 = 0x30
     $VK_1 = 0x31
     $VK_2 = 0x32
@@ -291,24 +362,25 @@ function Main {
         $VK_6 = @{ func = { Buzzerc }; name = "Buzzer Continous" }
         $VK_7 = @{ func = { Buzzerp }; name = "Buzzer Pulsing" }
     }
-    
-    #INIT Watchdog Ping
-    $lastPing = [DateTime]::Now
+
+    $lastPing  = [DateTime]::Now
     $MQTT_True = $false
 
     while ($script:running) {
 
-        # Ping alle 60 Sekunden senden
-    if (([DateTime]::Now - $lastPing).TotalSeconds -ge 2 -and -not $MQTT_True ) {
-            Publish-MQTTMessage -topic "status/ping"              -message "1"
+        # Windows Message Loop - damit SessionSwitch Events feuern
+        [System.Windows.Forms.Application]::DoEvents()
+
+        # Watchdog Ping
+        if (([DateTime]::Now - $lastPing).TotalSeconds -ge 2 -and -not $MQTT_True) {
+            Publish-MQTTMessage -topic "status/ping" -message "1"
             $MQTT_True = $true
-        
-    }
-    if (([DateTime]::Now - $lastPing).TotalSeconds -ge 4) {
-        Publish-MQTTMessage -topic "status/ping"              -message "0"
-        $lastPing = [DateTime]::Now
-        $MQTT_True = $false
-    }
+        }
+        if (([DateTime]::Now - $lastPing).TotalSeconds -ge 4) {
+            Publish-MQTTMessage -topic "status/ping" -message "0"
+            $lastPing  = [DateTime]::Now
+            $MQTT_True = $false
+        }
 
         $ctrlPressed    = Test-IsKeyPressed $VK_CONTROL
         $altPressed     = Test-IsKeyPressed $VK_MENU
@@ -333,8 +405,11 @@ function Main {
         Start-Sleep -Milliseconds 10
     }
 }
+
 function Cleanup {
-    #Resetting MQTT Topics
+    # Unregister session event
+    Get-EventSubscriber | Where-Object { $_.EventName -eq "SessionSwitch" } | Unregister-Event
+
     Publish-MQTTMessage -topic "status/red"              -message "0"
     Publish-MQTTMessage -topic "status/orange"           -message "0"
     Publish-MQTTMessage -topic "status/green"            -message "0"
@@ -342,8 +417,7 @@ function Cleanup {
     Publish-MQTTMessage -topic "status/white"            -message "0"
     Publish-MQTTMessage -topic "status/buzzer_continous" -message "0"
     Publish-MQTTMessage -topic "status/buzzer_pulsing"   -message "0"
-    
-    
+
     Disconnect-MQTT
 }
 
