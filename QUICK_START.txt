@@ -1,0 +1,88 @@
+QUICK START GUIDE - PowerShell MQTT Control Script
+=====================================================
+
+WHAT WAS CREATED:
+-----------------
+1. main.ps1 - PowerShell script with hotkey listener and MQTT integration
+2. .env - Configuration file with MQTT broker settings
+3. README.md - Full documentation
+
+
+SETUP:
+------
+1. Open PowerShell as Administrator
+2. Navigate to the script directory
+3. Configure .env file with your MQTT broker details (if different from defaults)
+4. Run: .\main.ps1
+
+
+CONFIGURATION (.env):
+---------------------
+Edit the .env file to set:
+  BROKER=your.mqtt.broker.com (default: 127.0.0.1)
+  PORT=1883 (default MQTT port)
+
+
+HOTKEYS:
+--------
+Ctrl+Alt+1  -> Red toggle
+Ctrl+Alt+2  -> Orange toggle
+Ctrl+Alt+3  -> Green toggle
+Ctrl+Alt+4  -> Blue toggle
+Ctrl+Alt+5  -> White toggle
+Ctrl+Alt+6  -> Buzzer (Correct) toggle
+Ctrl+Alt+7  -> Buzzer (Problem) toggle
+Ctrl+C      -> Exit script
+
+
+WHAT IT DOES:
+-------------
+- Listens to global keyboard hotkeys (Ctrl+Alt + number keys)
+- Each key toggles a status indicator (cycles through 0, 1, 2 states)
+- Automatically publishes state changes to MQTT broker
+- Each indicator has a dedicated MQTT topic (e.g., status/red, status/green)
+- Displays current state in console
+
+
+MQTT TOPICS:
+------------
+status/red
+status/orange
+status/green
+status/blue
+status/white
+status/buzzer_correct
+status/buzzer_problem
+
+
+TROUBLESHOOTING:
+----------------
+Q: Script won't run
+A: Make sure execution policy allows: Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+Q: MQTT connection failed
+A: Verify BROKER and PORT in .env are correct
+  - Check if MQTT broker is running
+  - Verify firewall allows connections
+  - Script will still work, just won't publish messages
+
+Q: Hotkeys not responding
+A: May require running as Administrator
+  Check if another app is using the hotkeys
+
+
+FILES INCLUDED:
+---------------
+- main.ps1 - Main script (READY TO USE)
+- .env - Configuration (CONFIGURED)
+- README.md - Full documentation
+- verify_setup.ps1 - Setup verification script
+- This file (QUICK_START.txt)
+
+
+NEXT STEPS:
+-----------
+1. Edit .env if needed
+2. Run: .\main.ps1
+3. Use Ctrl+Alt+1-7 to control indicators
+4. Monitor console for MQTT publish confirmations
