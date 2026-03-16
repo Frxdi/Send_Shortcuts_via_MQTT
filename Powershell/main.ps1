@@ -261,7 +261,7 @@ $script:sessionHandler = {
                     $packet    = [byte[]](@(0x30, [byte]$remaining) + $varHeader + $messageBytes)
                     $global:mqttStream.Write($packet, 0, $packet.Length)
                     $global:mqttStream.Flush()
-                    Write-Host "Published: $topic = $($msgs[$topic])" -ForegroundColor Cyan
+                    Write-Host "MQTT Published: $topic = $($msgs[$topic])" -ForegroundColor Cyan
                 }
                 catch {
                     Write-Host "Lock: Error publishing $topic : $_" -ForegroundColor Red
@@ -290,7 +290,7 @@ $script:sessionHandler = {
                     $packet    = [byte[]](@(0x30, [byte]$remaining) + $varHeader + $messageBytes)
                     $global:mqttStream.Write($packet, 0, $packet.Length)
                     $global:mqttStream.Flush()
-                    Write-Host "Published: $topic = $($msgs[$topic])" -ForegroundColor Cyan
+                    Write-Host "MQTT Published: $topic = $($msgs[$topic])" -ForegroundColor Cyan
                 }
                 catch {
                     Write-Host "Unlock: Error publishing $topic : $_" -ForegroundColor Red
