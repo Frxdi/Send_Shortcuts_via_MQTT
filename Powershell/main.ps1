@@ -13,9 +13,17 @@ function Load-EnvFile {
     }
     
     Get-Content $envPath | ForEach-Object {
+        if ($_ -match '^\s*#') { return }
+
         if ($_ -match '^\s*([^#=]+)\s*=\s*(.+)$') {
-            $name = $matches[1].Trim()
+            $name  = $matches[1].Trim()
             $value = $matches[2].Trim()
+
+            if (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+                ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+
             [Environment]::SetEnvironmentVariable($name, $value, 'Process')
         }
     }
@@ -29,9 +37,9 @@ function Initialize-MQTT {
     try {
         $script:mqttClient = New-Object System.Net.Sockets.TcpClient
         $script:mqttClient.Connect($script:BROKER, [int]$script:PORT)
-        $stream = $script:mqttClient.GetStream()
+        $stream            = $script:mqttClient.GetStream()
         $script:mqttStream = $stream
-        $global:mqttStream = $stream        # Für Event Handler Runspace
+        $global:mqttStream = $stream
         $global:mqttConnected = $false
 
         $clientId      = "PS_Client"
@@ -64,7 +72,7 @@ function Initialize-MQTT {
 
         if ($response[0] -eq 0x20 -and $response[3] -eq 0x00) {
             $script:mqttConnected = $true
-            $global:mqttConnected = $true   # Für Event Handler Runspace
+            $global:mqttConnected = $true
             Write-Host "Connected to MQTT Broker: $script:BROKER`:$script:PORT" -ForegroundColor Green
         } else {
             Write-Host "MQTT CONNACK failed: $($response -join ' ')" -ForegroundColor Red
@@ -76,6 +84,43 @@ function Initialize-MQTT {
         Write-Host "Warning: Could not connect to MQTT Broker: $_" -ForegroundColor Yellow
         $script:mqttConnected = $false
         $global:mqttConnected = $false
+    }
+}
+
+function Reconnect-MQTT {
+    Write-Host "Verbindung verloren - versuche Reconnect..." -ForegroundColor Yellow
+
+    try {
+        if ($script:mqttStream) { $script:mqttStream.Close() }
+        if ($script:mqttClient) { $script:mqttClient.Close() }
+    } catch { }
+
+    $script:mqttClient    = $null
+    $script:mqttStream    = $null
+    $script:mqttConnected = $false
+    $global:mqttConnected = $false
+    $global:mqttStream    = $null
+
+    Start-Sleep -Seconds 5
+    Initialize-MQTT
+
+    if ($script:mqttConnected) {
+        Write-Host "Reconnect erfolgreich!" -ForegroundColor Green
+    } else {
+        Write-Host "Reconnect fehlgeschlagen - nächster Versuch in 5s..." -ForegroundColor Red
+    }
+}
+
+function Test-MQTTConnection {
+    if (-not $script:mqttClient) { return $false }
+    if (-not $script:mqttClient.Connected) { return $false }
+
+    try {
+        $socket         = $script:mqttClient.Client
+        $isDisconnected = ($socket.Poll(1000, [System.Net.Sockets.SelectMode]::SelectRead) -and $socket.Available -eq 0)
+        return -not $isDisconnected
+    } catch {
+        return $false
     }
 }
 
@@ -200,13 +245,7 @@ $script:sessionHandler = {
         Write-Host "PC gesperrt" -ForegroundColor Yellow
 
         $msgs = [ordered]@{
-            "status/red"              = "0"
-            "status/orange"           = "1"
-            "status/green"            = "0"
-            "status/blue"             = "0"
-            "status/white"            = "0"
-            "status/buzzer_continous" = "0"
-            "status/buzzer_pulsing"   = "0"
+            "status/WinStatus" = "0"
         }
 
         if ($global:mqttConnected -and $global:mqttStream -ne $null) {
@@ -235,13 +274,7 @@ $script:sessionHandler = {
         Write-Host "PC entsperrt" -ForegroundColor Green
 
         $msgs = [ordered]@{
-            "status/red"              = "0"
-            "status/orange"           = "0"
-            "status/green"            = "1"
-            "status/blue"             = "0"
-            "status/white"            = "0"
-            "status/buzzer_continous" = "0"
-            "status/buzzer_pulsing"   = "0"
+            "status/WinStatus" = "1"
         }
 
         if ($global:mqttConnected -and $global:mqttStream -ne $null) {
@@ -274,7 +307,6 @@ $script:sessionHandler = {
 function Initialize {
     param([string]$scriptDir)
 
-    # Load .env
     $envFilePath = Join-Path $scriptDir ".env"
     Load-EnvFile $envFilePath
 
@@ -317,7 +349,7 @@ function Initialize {
     # Connect MQTT
     Initialize-MQTT
 
-    # Register Session Lock/Unlock handler NACH MQTT connect
+    # Register Session Lock/Unlock handler nach MQTT connect
     Add-Type -AssemblyName System.Windows.Forms
     Register-ObjectEvent `
         -InputObject ([Microsoft.Win32.SystemEvents]) `
@@ -326,7 +358,7 @@ function Initialize {
 
     Write-Host "Session Lock/Unlock listener registered" -ForegroundColor Green
 
-    # Reset all topics to 0
+    # Reset all topics
     Publish-MQTTMessage -topic "status/red"              -message "0"
     Publish-MQTTMessage -topic "status/orange"           -message "0"
     Publish-MQTTMessage -topic "status/green"            -message "0"
@@ -334,6 +366,7 @@ function Initialize {
     Publish-MQTTMessage -topic "status/white"            -message "0"
     Publish-MQTTMessage -topic "status/buzzer_continous" -message "0"
     Publish-MQTTMessage -topic "status/buzzer_pulsing"   -message "0"
+    Publish-MQTTMessage -topic "status/WinStatus"        -message "1"
 
     # Hide console window
     $consoleHandle = [Win32.MeineWin32API]::GetConsoleWindow()
@@ -363,13 +396,23 @@ function Main {
         $VK_7 = @{ func = { Buzzerp }; name = "Buzzer Pulsing" }
     }
 
-    $lastPing  = [DateTime]::Now
-    $MQTT_True = $false
+    $lastPing            = [DateTime]::Now
+    $lastConnectionCheck = [DateTime]::Now
+    $MQTT_True           = $false
 
     while ($script:running) {
 
         # Windows Message Loop - damit SessionSwitch Events feuern
         [System.Windows.Forms.Application]::DoEvents()
+
+        # Verbindung alle 5 Sekunden prüfen
+        if (([DateTime]::Now - $lastConnectionCheck).TotalSeconds -ge 5) {
+            $lastConnectionCheck = [DateTime]::Now
+
+            if (-not (Test-MQTTConnection)) {
+                Reconnect-MQTT
+            }
+        }
 
         # Watchdog Ping
         if (([DateTime]::Now - $lastPing).TotalSeconds -ge 2 -and -not $MQTT_True) {
@@ -407,7 +450,6 @@ function Main {
 }
 
 function Cleanup {
-    # Unregister session event
     Get-EventSubscriber | Where-Object { $_.EventName -eq "SessionSwitch" } | Unregister-Event
 
     Publish-MQTTMessage -topic "status/red"              -message "0"
@@ -417,6 +459,7 @@ function Cleanup {
     Publish-MQTTMessage -topic "status/white"            -message "0"
     Publish-MQTTMessage -topic "status/buzzer_continous" -message "0"
     Publish-MQTTMessage -topic "status/buzzer_pulsing"   -message "0"
+    Publish-MQTTMessage -topic "status/WinStatus"        -message "0"
 
     Disconnect-MQTT
 }
